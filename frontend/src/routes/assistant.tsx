@@ -5,14 +5,17 @@ import {
   AlertTriangle,
   ArrowUp,
   Bookmark,
+  BadgeCheck,
   CheckCircle2,
   ClipboardCheck,
   Copy,
   FileText,
   History,
   Loader2,
+  MapPinned,
   PackageCheck,
   Plus,
+  ScrollText,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -283,6 +286,60 @@ function statusToVerdict(status: OverallStatus): "halal" | "haram" | "mushbooh" 
   return "halal";
 }
 
+function getReadinessCopy(status: OverallStatus): { title: string; description: string; action: string } {
+  if (status === "Not Ready") {
+    return {
+      title: "Certification blocker detected",
+      description:
+        "This product should not move into certification submission until the blocker ingredients are resolved or supported with stronger documentation.",
+      action: "Prioritize blocker review before preparing the submission pack.",
+    };
+  }
+
+  if (status === "Needs Review") {
+    return {
+      title: "Needs technical review",
+      description:
+        "No hard blockers were found, but the product still has medium-risk ingredients that should be reviewed before submission.",
+      action: "Collect supporting documents and ask a halal assurance reviewer to confirm the risk position.",
+    };
+  }
+
+  return {
+    title: "Low-risk scan result",
+    description:
+      "No blocker or warning ingredients were found in this scan, based on the current Neo4j knowledge graph.",
+    action: "Keep ingredient documentation ready and continue with the normal pre-certification workflow.",
+  };
+}
+
+function getToneStyles(tone: "blocker" | "warning" | "safe") {
+  if (tone === "blocker") {
+    return {
+      card: "border-verdict-haram/25 bg-verdict-haram/5",
+      badge: "border-verdict-haram/30 bg-verdict-haram/10 text-verdict-haram",
+      icon: "text-verdict-haram",
+      action: "Resolve before submission",
+    };
+  }
+
+  if (tone === "warning") {
+    return {
+      card: "border-verdict-mushbooh/25 bg-verdict-mushbooh/5",
+      badge: "border-verdict-mushbooh/30 bg-verdict-mushbooh/10 text-verdict-mushbooh",
+      icon: "text-verdict-mushbooh",
+      action: "Review supporting evidence",
+    };
+  }
+
+  return {
+    card: "border-verdict-halal/25 bg-verdict-halal/5",
+    badge: "border-verdict-halal/30 bg-verdict-halal/10 text-verdict-halal",
+    icon: "text-verdict-halal",
+    action: "Keep documentation on file",
+  };
+}
+
 function IntroHeader() {
   return (
     <div className="text-center">
@@ -403,9 +460,12 @@ function ReportHeader({
   isLoading: boolean;
   onEdit: () => void;
 }) {
+  const readiness = report ? getReadinessCopy(report.overall_status) : null;
+
   return (
-    <div className="rounded-[2rem] border border-hairline bg-surface p-5 shadow-elegant sm:p-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="relative overflow-hidden rounded-[2rem] border border-hairline bg-surface p-5 shadow-elegant sm:p-6">
+      <div className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-jade/10 blur-3xl" />
+      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <PackageCheck className="h-3.5 w-3.5 text-jade" />
@@ -433,6 +493,17 @@ function ReportHeader({
           </button>
         </div>
       </div>
+      {readiness && (
+        <div className="relative mt-5 grid gap-3 rounded-2xl border border-hairline bg-background/35 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div>
+            <div className="text-sm font-medium">{readiness.title}</div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{readiness.description}</p>
+          </div>
+          <div className="rounded-xl border border-jade/20 bg-jade/5 px-3 py-2 text-xs leading-relaxed text-jade sm:max-w-[220px]">
+            {readiness.action}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -479,29 +550,59 @@ function TabStrip({
 }
 
 function SummaryTab({ report }: { report: ComplianceReport }) {
+  const readiness = getReadinessCopy(report.overall_status);
   const cards = [
     {
       label: "Ingredients",
       value: report.summary.total_ingredients,
       icon: ClipboardCheck,
       tone: "text-jade",
+      helper: "Normalized and checked",
     },
     {
       label: "Blockers",
       value: report.summary.blockers_count,
       icon: AlertTriangle,
       tone: "text-verdict-haram",
+      helper: "Must be resolved",
     },
     {
       label: "Warnings",
       value: report.summary.warnings_count,
       icon: FileText,
       tone: "text-verdict-mushbooh",
+      helper: "Needs review",
     },
   ];
 
   return (
     <div className="space-y-5">
+      <div className="overflow-hidden rounded-[1.75rem] border border-hairline bg-surface">
+        <div className="grid gap-5 p-5 sm:grid-cols-[1.1fr_0.9fr] sm:p-6">
+          <div>
+            <div className="flex items-center gap-2 text-xs text-jade">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Readiness decision
+            </div>
+            <h2 className="font-display mt-3 text-3xl font-light leading-tight sm:text-4xl">
+              {report.overall_status}
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-foreground/80">
+              {readiness.description}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-jade/20 bg-jade/5 p-4">
+            <div className="text-[10px] font-medium uppercase tracking-widest text-jade">
+              Recommended next move
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-foreground/85">{readiness.action}</p>
+          </div>
+        </div>
+        <div className="border-t border-hairline bg-background/25 px-5 py-3 text-xs leading-relaxed text-muted-foreground sm:px-6">
+          {report.summary.human_readable}
+        </div>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-3">
         {cards.map((card) => (
           <div key={card.label} className="rounded-2xl border border-hairline bg-surface p-5">
@@ -510,18 +611,68 @@ function SummaryTab({ report }: { report: ComplianceReport }) {
               {card.label}
             </div>
             <div className="font-display mt-3 text-3xl font-light">{card.value}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{card.helper}</div>
           </div>
         ))}
       </div>
 
-      <div className="rounded-2xl border border-jade/20 bg-jade/5 p-5">
-        <div className="flex items-center gap-2 text-xs text-jade">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          Overall status: {report.overall_status}
+      <div className="grid gap-3 md:grid-cols-2">
+        <CategoryPreview
+          title="Highest priority"
+          entries={report.blockers}
+          emptyText="No blocker ingredients returned."
+          tone="blocker"
+        />
+        <CategoryPreview
+          title="Review queue"
+          entries={report.warnings.length > 0 ? report.warnings : report.safe}
+          emptyText="No warnings or safe entries returned."
+          tone={report.warnings.length > 0 ? "warning" : "safe"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CategoryPreview({
+  title,
+  entries,
+  emptyText,
+  tone,
+}: {
+  title: string;
+  entries: ComplianceEntry[];
+  emptyText: string;
+  tone: "blocker" | "warning" | "safe";
+}) {
+  const styles = getToneStyles(tone);
+
+  return (
+    <div className={`rounded-2xl border p-4 ${styles.card}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+          {title}
         </div>
-        <p className="mt-3 text-sm leading-relaxed text-foreground/85">
-          {report.summary.human_readable}
-        </p>
+        <span className={`rounded-full border px-2.5 py-1 text-[10px] ${styles.badge}`}>
+          {entries.length} item(s)
+        </span>
+      </div>
+      <div className="mt-3 space-y-2">
+        {entries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{emptyText}</p>
+        ) : (
+          entries.slice(0, 3).map((entry) => (
+            <div key={`${title}-${entry.ingredient}-${entry.risk}`} className="rounded-xl border border-hairline bg-background/35 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-display text-base">{entry.ingredient}</span>
+                <span className={`text-xs ${styles.icon}`}>{entry.risk}</span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                {entry.reasoning}
+              </p>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -538,36 +689,88 @@ function EntryList({
 }) {
   if (entries.length === 0) {
     return (
-      <div className="rounded-2xl border border-hairline bg-surface p-6 text-sm text-muted-foreground">
-        {emptyText}
+      <div className="rounded-2xl border border-hairline bg-surface p-6">
+        <div className="flex items-center gap-2 text-sm text-foreground">
+          <BadgeCheck className="h-4 w-4 text-jade" />
+          Nothing to review here
+        </div>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{emptyText}</p>
       </div>
     );
   }
 
-  const toneClass =
+  const styles = getToneStyles(tone);
+  const heading =
     tone === "blocker"
-      ? "text-verdict-haram border-verdict-haram/30 bg-verdict-haram/5"
+      ? "Blocker review"
       : tone === "warning"
-        ? "text-verdict-mushbooh border-verdict-mushbooh/30 bg-verdict-mushbooh/5"
-        : "text-verdict-halal border-verdict-halal/30 bg-verdict-halal/5";
+        ? "Warning review"
+        : "Low-risk ingredients";
 
   return (
-    <div className="space-y-3">
-      {entries.map((entry) => (
-        <div key={`${entry.ingredient}-${entry.risk}`} className="rounded-2xl border border-hairline bg-surface p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="font-display text-xl font-light">{entry.ingredient}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-foreground/80">{entry.reasoning}</p>
+    <div className="space-y-4">
+      <div className={`rounded-2xl border p-4 ${styles.card}`}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              {heading}
             </div>
-            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${toneClass}`}>
+            <p className="mt-1 text-sm leading-relaxed text-foreground/80">
+              {styles.action}. Review each ingredient below with its evidence needs and market scope.
+            </p>
+          </div>
+          <span className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${styles.badge}`}>
+            {entries.length} ingredient(s)
+          </span>
+        </div>
+      </div>
+
+      {entries.map((entry) => (
+        <div
+          key={`${entry.ingredient}-${entry.risk}`}
+          className="overflow-hidden rounded-[1.5rem] border border-hairline bg-surface shadow-soft"
+        >
+          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <AlertTriangle className={`h-3.5 w-3.5 ${styles.icon}`} />
+                Ingredient finding
+              </div>
+              <h3 className="font-display mt-1 text-2xl font-light">{entry.ingredient}</h3>
+            </div>
+            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${styles.badge}`}>
               {entry.risk}
             </span>
           </div>
 
-          <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
-            <InfoPills title="Required documents" values={entry.required_documents} />
-            <InfoPills title="Affected markets" values={entry.affected_markets} />
+          <div className="border-y border-hairline bg-background/25 p-5">
+            <div className="flex items-center gap-2 text-xs text-jade">
+              <ScrollText className="h-3.5 w-3.5" />
+              Risk rationale
+            </div>
+            <p className="mt-2 text-sm leading-[1.8] text-foreground/85">{entry.reasoning}</p>
+          </div>
+
+          <div className="grid gap-0 text-xs md:grid-cols-3">
+            <InfoPanel
+              icon={FileText}
+              title="Required evidence"
+              values={entry.required_documents}
+              emptyText="No documents returned"
+            />
+            <InfoPanel
+              icon={MapPinned}
+              title="Market scope"
+              values={entry.affected_markets}
+              emptyText="No markets returned"
+            />
+            <div className="border-t border-hairline p-5 md:border-l md:border-t-0">
+              <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+                <ShieldCheck className={`h-3.5 w-3.5 ${styles.icon}`} />
+                Certification impact
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-foreground/80">{styles.action}</p>
+            </div>
           </div>
         </div>
       ))}
@@ -575,13 +778,24 @@ function EntryList({
   );
 }
 
-function InfoPills({ title, values }: { title: string; values: string[] }) {
+function InfoPanel({
+  icon: Icon,
+  title,
+  values,
+  emptyText,
+}: {
+  icon: typeof FileText;
+  title: string;
+  values: string[];
+  emptyText: string;
+}) {
   return (
-    <div>
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+    <div className="border-t border-hairline p-5 md:border-t-0">
+      <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+        <Icon className="h-3.5 w-3.5 text-jade" />
         {title}
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="mt-3 flex flex-wrap gap-1.5">
         {values.length > 0 ? (
           values.map((value) => (
             <span key={value} className="rounded-full border border-hairline bg-background/40 px-2.5 py-1 text-muted-foreground">
@@ -589,7 +803,7 @@ function InfoPills({ title, values }: { title: string; values: string[] }) {
             </span>
           ))
         ) : (
-          <span className="text-muted-foreground">None returned</span>
+          <span className="text-muted-foreground">{emptyText}</span>
         )}
       </div>
     </div>

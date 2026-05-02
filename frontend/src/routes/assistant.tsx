@@ -7,6 +7,7 @@ import {
   Bookmark,
   BadgeCheck,
   CheckCircle2,
+  ChevronDown,
   ClipboardCheck,
   Copy,
   FileText,
@@ -687,6 +688,8 @@ function EntryList({
   emptyText: string;
   tone: "blocker" | "warning" | "safe";
 }) {
+  const [openIngredient, setOpenIngredient] = useState<string | null>(null);
+
   if (entries.length === 0) {
     return (
       <div className="rounded-2xl border border-hairline bg-surface p-6">
@@ -726,54 +729,97 @@ function EntryList({
       </div>
 
       {entries.map((entry) => (
-        <div
+        <ExpandableIngredientFinding
           key={`${entry.ingredient}-${entry.risk}`}
-          className="overflow-hidden rounded-[1.5rem] border border-hairline bg-surface shadow-soft"
-        >
-          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <AlertTriangle className={`h-3.5 w-3.5 ${styles.icon}`} />
-                Ingredient finding
-              </div>
-              <h3 className="font-display mt-1 text-2xl font-light">{entry.ingredient}</h3>
-            </div>
-            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${styles.badge}`}>
-              {entry.risk}
-            </span>
-          </div>
-
-          <div className="border-y border-hairline bg-background/25 p-5">
-            <div className="flex items-center gap-2 text-xs text-jade">
-              <ScrollText className="h-3.5 w-3.5" />
-              Risk rationale
-            </div>
-            <p className="mt-2 text-sm leading-[1.8] text-foreground/85">{entry.reasoning}</p>
-          </div>
-
-          <div className="grid gap-0 text-xs md:grid-cols-3">
-            <InfoPanel
-              icon={FileText}
-              title="Required evidence"
-              values={entry.required_documents}
-              emptyText="No documents returned"
-            />
-            <InfoPanel
-              icon={MapPinned}
-              title="Market scope"
-              values={entry.affected_markets}
-              emptyText="No markets returned"
-            />
-            <div className="border-t border-hairline p-5 md:border-l md:border-t-0">
-              <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-                <ShieldCheck className={`h-3.5 w-3.5 ${styles.icon}`} />
-                Certification impact
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-foreground/80">{styles.action}</p>
-            </div>
-          </div>
-        </div>
+          entry={entry}
+          isOpen={openIngredient === entry.ingredient}
+          styles={styles}
+          onToggle={() =>
+            setOpenIngredient((currentIngredient) =>
+              currentIngredient === entry.ingredient ? null : entry.ingredient,
+            )
+          }
+        />
       ))}
+    </div>
+  );
+}
+
+function ExpandableIngredientFinding({
+  entry,
+  isOpen,
+  styles,
+  onToggle,
+}: {
+  entry: ComplianceEntry;
+  isOpen: boolean;
+  styles: ReturnType<typeof getToneStyles>;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[1.5rem] border border-hairline bg-surface shadow-soft">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-4 p-4 text-left transition-colors hover:bg-background/25 sm:p-5"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <AlertTriangle className={`h-3.5 w-3.5 ${styles.icon}`} />
+            Ingredient finding
+          </div>
+          <h3 className="font-display mt-1 truncate text-2xl font-light">{entry.ingredient}</h3>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className={`rounded-full border px-3 py-1 text-xs font-medium ${styles.badge}`}>
+            {entry.risk}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
+          />
+        </div>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+          >
+            <div className="border-y border-hairline bg-background/25 p-5">
+              <div className="flex items-center gap-2 text-xs text-jade">
+                <ScrollText className="h-3.5 w-3.5" />
+                Risk rationale
+              </div>
+              <p className="mt-2 text-sm leading-[1.8] text-foreground/85">{entry.reasoning}</p>
+            </div>
+
+            <div className="grid gap-0 text-xs md:grid-cols-3">
+              <InfoPanel
+                icon={FileText}
+                title="Required evidence"
+                values={entry.required_documents}
+                emptyText="No documents returned"
+              />
+              <InfoPanel
+                icon={MapPinned}
+                title="Market scope"
+                values={entry.affected_markets}
+                emptyText="No markets returned"
+              />
+              <div className="border-t border-hairline p-5 md:border-l md:border-t-0">
+                <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+                  <ShieldCheck className={`h-3.5 w-3.5 ${styles.icon}`} />
+                  Certification impact
+                </div>
+                <p className="mt-3 text-sm leading-relaxed text-foreground/80">{styles.action}</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

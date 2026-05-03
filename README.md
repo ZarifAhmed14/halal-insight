@@ -29,6 +29,14 @@ backend/neo4j/seeds/domain-expansion.cypher
 
 The frontend includes demo OCR mode, so the label-photo workflow can be presented before an OpenAI API key is connected.
 
+## Deployment
+
+Use the deployment checklist here:
+
+```text
+DEPLOYMENT.md
+```
+
 ## Frontend
 
 Run frontend commands from:

@@ -256,12 +256,13 @@ async function queryIngredientCompliance(input: ValidatedInput): Promise<Queried
   const session = driver.session({ defaultAccessMode: neo4j.session.READ }); // This opens a read-only Neo4j session because this function only queries data.
   try { // This try block ensures the session is always closed even if the query fails.
     const query = [ // This array builds the Cypher query in a readable way so each clause is easy to inspect.
-      "MATCH (i:Ingredient)-[:HAS_RISK]->(r:Risk)", // This finds risk relationships connected to ingredients.
-      "MATCH (i)-[:AFFECTS_MARKET]->(selectedMarket:Market)", // This restricts results to ingredients that affect the requested market.
+      "UNWIND $ingredients AS requestedIngredient", // This starts from the exact submitted ingredient list so the graph cannot return unrelated ingredients.
+      "MATCH (i:Ingredient { name: requestedIngredient })", // This matches only ingredient nodes whose name equals one submitted normalized ingredient.
+      "MATCH (i)-[:HAS_RISK]->(r:Risk)", // This finds risk relationships only for the already matched submitted ingredient.
+      "MATCH (i)-[:AFFECTS_MARKET]->(selectedMarket:Market { name: $market })", // This restricts results to submitted ingredients that affect the requested market.
       "OPTIONAL MATCH (r)-[:APPLIES_TO_DOMAIN]->(riskDomain:Domain)", // This reads an optional domain relationship so new domain-aware risk data can coexist with legacy graph rows.
-      "WHERE i.name IN $ingredients", // This filters the query to only the normalized ingredient names provided by the request.
-      "AND selectedMarket.name = $market", // This filters the query to the requested market value.
-      "AND (riskDomain IS NULL OR riskDomain.name = $domain)", // This keeps legacy risks when no domain exists and filters domain-aware risks to the requested domain.
+      "WITH i, r, selectedMarket, riskDomain", // This carries only the matched submitted ingredient, its risk, market, and optional domain into the filter step.
+      "WHERE riskDomain IS NULL OR riskDomain.name = $domain", // This keeps legacy risks when no domain exists and filters domain-aware risks to the requested domain.
       "OPTIONAL MATCH (i)-[:REQUIRES_DOCUMENT]->(d:DocumentRequirement)", // This fetches any required documents linked to the ingredient.
       "OPTIONAL MATCH (i)-[:AFFECTS_MARKET]->(affectedMarket:Market)", // This fetches every affected market so the response can show broader impact.
       "RETURN", // This starts the return section of the Cypher query.

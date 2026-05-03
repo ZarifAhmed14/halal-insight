@@ -155,8 +155,55 @@ function parseModelJson(text: string): ExtractionResult | null { // This helper 
 function buildExtractionPrompt(input: ExtractionRequest): string { // This helper builds the vision prompt in one place so the model's job stays narrow.
   const productText = input.product_name ? `Product name: ${input.product_name}.` : "Product name: unknown."; // This gives the model product context when the user provided it.
   const marketText = input.market ? `Target market: ${input.market}.` : "Target market: unknown."; // This gives the model market context when the user provided it.
-  return `${productText} ${marketText} Domain: ${input.domain}. Extract readable label text and parse only the ingredient list from this image. Return strict JSON with keys raw_text, ingredients, confidence, warnings, needs_review, visual_warning. Use confidence from 0 to 1. If the image is blurry, incomplete, or no ingredient label is visible, set needs_review true and explain in warnings. If the image visually appears to show pork, ham, bacon, alcohol, or another obvious concern, set visual_warning to a cautious warning such as "Likely pork/ham detected. Please verify label or product source." Do not make a final halal or haram ruling from appearance alone.`; // This instructs the model to extract OCR data and warnings only, not final compliance decisions.
+  return `${productText} ${marketText} Domain: ${input.domain}. Extract readable label text and parse only the ingredient list from this image. Return strict JSON with keys raw_text, ingredients, confidence, warnings, needs_review, visual_warning. Use confidence from 0 to 1. If the image is blurry, incomplete, or no ingredient label is visible, set needs_review true and explain in warnings. If there is no visual warning, set visual_warning to an empty string. If the image visually appears to show pork, ham, bacon, alcohol, or another obvious concern, set visual_warning to a cautious warning such as "Likely pork/ham detected. Please verify label or product source." Do not make a final halal or haram ruling from appearance alone.`; // This instructs the model to extract OCR data and warnings only, not final compliance decisions.
 } // This line closes the buildExtractionPrompt helper so the AI call stays readable.
+function extractGeminiText(value: unknown): string | null { // This helper finds model text inside Gemini's generateContent response payload.
+  if (isPlainObject(value) && typeof value.text === "string") { // This checks the Gemini part shape where generated text is stored under a text field.
+    return value.text; // This returns the generated JSON text so the caller can parse it.
+  } // This line closes the direct Gemini text branch so arrays and nested objects can be searched.
+  if (Array.isArray(value)) { // This checks whether the current value is an array such as candidates or parts.
+    for (const item of value) { // This loops through each nested array item looking for generated text.
+      const nestedText = extractGeminiText(item); // This recursively searches the nested item for a text field.
+      if (nestedText) { // This checks whether the recursive search found text.
+        return nestedText; // This returns the first generated text found in the response tree.
+      } // This line closes the nested-text guard so the loop can continue.
+    } // This line closes the array loop after every nested item has been searched.
+  } // This line closes the array branch so object values can be searched next.
+  if (isPlainObject(value)) { // This checks whether the current value is an object.
+    for (const nestedValue of Object.values(value)) { // This loops through object values looking for generated text.
+      const nestedText = extractGeminiText(nestedValue); // This recursively searches each object value.
+      if (nestedText) { // This checks whether a nested value contained generated text.
+        return nestedText; // This returns the generated text immediately once found.
+      } // This line closes the nested-text guard so the search can continue.
+    } // This line closes the object-value loop after every value has been searched.
+  } // This line closes the object branch so the null fallback can run.
+  return null; // This returns null when the Gemini payload does not contain generated text.
+} // This line closes the extractGeminiText helper so Gemini parsing stays separate from OpenAI parsing.
+async function callGeminiVision(input: ExtractionRequest): Promise<ExtractionResult> { // This helper calls Gemini vision for low-cost label OCR and ingredient extraction.
+  const apiKey = Deno.env.get("GEMINI_API_KEY"); // This reads the Gemini API key from Supabase Edge Function secrets instead of hardcoding it.
+  if (!apiKey) { // This checks whether the Gemini key has been configured.
+    throw new Error("Gemini image extraction is not configured. Add GEMINI_API_KEY to the Edge Function secrets."); // This gives a clear setup error instead of failing mysteriously.
+  } // This line closes the missing-key guard so the provider call only happens when configured.
+  const model = Deno.env.get("GEMINI_VISION_MODEL") || Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash"; // This reads an optional model override and uses a cost-conscious multimodal default.
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`; // This builds the Gemini REST endpoint for the selected model.
+  const response = await fetch(endpoint, { // This sends the extraction request to Gemini's generateContent API.
+    method: "POST", // This uses POST because Gemini creates a new model response from the prompt and image.
+    headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" }, // This sends the Gemini API key and declares a JSON request body.
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: buildExtractionPrompt(input) }, { inline_data: { mime_type: input.mime_type, data: input.image_base64 } }] }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { raw_text: { type: "STRING" }, ingredients: { type: "ARRAY", items: { type: "STRING" } }, confidence: { type: "NUMBER" }, warnings: { type: "ARRAY", items: { type: "STRING" } }, needs_review: { type: "BOOLEAN" }, visual_warning: { type: "STRING" } }, required: ["raw_text", "ingredients", "confidence", "warnings", "needs_review", "visual_warning"] } } }), // This sends the prompt, image bytes, and JSON schema so Gemini returns predictable structured output.
+  }); // This line closes the fetch call options.
+  const responsePayload = await response.json().catch(() => null); // This parses the Gemini response defensively because provider errors can vary.
+  if (!response.ok) { // This checks whether Gemini returned a non-success HTTP status.
+    const errorMessage = isPlainObject(responsePayload) && isPlainObject(responsePayload.error) && typeof responsePayload.error.message === "string" ? responsePayload.error.message : "Gemini image extraction failed."; // This extracts Gemini's error message when available.
+    throw new Error(errorMessage); // This throws a clear error so the handler can return a controlled server error.
+  } // This line closes the provider-error guard so successful output can be parsed.
+  const outputText = extractGeminiText(responsePayload) || ""; // This extracts the generated JSON text from Gemini's response.
+  const parsedResult = parseModelJson(outputText); // This parses the model output into HalalIQ's extraction result shape.
+  if (parsedResult) { // This checks whether structured JSON parsing succeeded.
+    return parsedResult; // This returns Gemini's structured extraction result.
+  } // This line closes the parsed-result branch so fallback parsing can run.
+  const fallbackIngredients = parseIngredientsFromText(outputText); // This extracts ingredient candidates from raw text when structured JSON is missing.
+  return { raw_text: outputText, ingredients: fallbackIngredients, confidence: fallbackIngredients.length > 0 ? 0.45 : 0.2, warnings: ["Gemini output was not structured, so HalalIQ used fallback parsing. Please review carefully."], needs_review: true, visual_warning: null }; // This returns a cautious fallback response that always asks for review.
+} // This line closes the callGeminiVision helper so the handler can use Gemini as the preferred provider.
 async function callOpenAiVision(input: ExtractionRequest): Promise<ExtractionResult> { // This helper calls OpenAI vision through the Responses API.
   const apiKey = Deno.env.get("OPENAI_API_KEY"); // This reads the OpenAI API key from Supabase Edge Function secrets.
   if (!apiKey) { // This checks whether the function has been configured with an OpenAI key.
@@ -182,6 +229,15 @@ async function callOpenAiVision(input: ExtractionRequest): Promise<ExtractionRes
   const fallbackIngredients = parseIngredientsFromText(outputText); // This extracts ingredient candidates from raw text when model JSON is missing.
   return { raw_text: outputText, ingredients: fallbackIngredients, confidence: fallbackIngredients.length > 0 ? 0.45 : 0.2, warnings: ["Extraction output was not structured, so HalalIQ used fallback parsing. Please review carefully."], needs_review: true, visual_warning: null }; // This returns a cautious fallback response that always asks for review.
 } // This line closes the callOpenAiVision helper so the handler can call one extraction function.
+async function extractIngredientsWithAi(input: ExtractionRequest): Promise<ExtractionResult> { // This helper chooses the configured AI provider while keeping the handler simple.
+  if (Deno.env.get("GEMINI_API_KEY")) { // This checks whether Gemini is configured, which is the low-cost provider we prefer for the MVP.
+    return await callGeminiVision(input); // This uses Gemini first so the project can run with the free or low-cost Gemini setup.
+  } // This line closes the Gemini provider branch so OpenAI can remain available as a fallback.
+  if (Deno.env.get("OPENAI_API_KEY")) { // This checks whether OpenAI is configured instead of Gemini.
+    return await callOpenAiVision(input); // This uses the existing OpenAI integration when Gemini is not configured.
+  } // This line closes the OpenAI provider branch so a clear setup error can be returned.
+  throw new Error("Image extraction is not configured. Add GEMINI_API_KEY or OPENAI_API_KEY to the Edge Function secrets."); // This tells the developer exactly which secret is missing.
+} // This line closes the provider-selection helper so the request handler stays clean.
 serve(async (req: Request): Promise<Response> => { // This starts the Supabase Edge Function request handler.
   if (req.method === "OPTIONS") { // This checks whether the browser is sending a CORS preflight request.
     return new Response(null, { status: 204, headers: corsHeaders }); // This returns an empty success response so the browser allows the real POST.
@@ -200,7 +256,7 @@ serve(async (req: Request): Promise<Response> => { // This starts the Supabase E
     if (!validationResult.success) { // This checks whether request validation failed.
       return createJsonResponse({ error: validationResult.error }, 400); // This returns a client error because the request payload is invalid.
     } // This line closes the validation-failure branch so only valid input reaches AI.
-    const extractionResult = await callOpenAiVision(validationResult.data); // This extracts raw text, ingredient candidates, and review warnings from the label photo.
+    const extractionResult = await extractIngredientsWithAi(validationResult.data); // This extracts raw text, ingredient candidates, and review warnings from the label photo.
     return createJsonResponse(extractionResult, 200); // This returns the extraction result for frontend review and editing.
   } catch (error) { // This catch block handles provider and unexpected server errors.
     const message = error instanceof Error ? error.message : "Image extraction failed."; // This safely converts unknown errors into readable text.

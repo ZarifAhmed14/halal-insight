@@ -28,12 +28,12 @@ If you are using the Supabase dashboard instead of the CLI:
 6. Click `Deploy updates`.
 7. Test the frontend manual scan.
 
-When you later add an AI API key:
+When you add the Gemini API key:
 
 1. Create `extract-ingredients-from-image`.
 2. Copy the full contents of `backend/supabase/functions/extract-ingredients-from-image/index.ts`.
-3. Add the required secret `OPENAI_API_KEY`.
-4. Optionally add `OPENAI_VISION_MODEL`.
+3. Add the required secret `GEMINI_API_KEY`.
+4. Optionally add `GEMINI_VISION_MODEL`, defaulting to `gemini-2.5-flash`.
 5. Click `Deploy updates`.
 6. Test photo extraction with a real label image.
 
@@ -49,7 +49,16 @@ supabase functions deploy analyze-food
 supabase functions deploy extract-ingredients-from-image
 ```
 
-Only deploy `extract-ingredients-from-image` after setting AI secrets:
+Only deploy `extract-ingredients-from-image` after setting AI secrets.
+
+Recommended low-cost Gemini setup:
+
+```powershell
+supabase secrets set GEMINI_API_KEY="your-gemini-api-key"
+supabase secrets set GEMINI_VISION_MODEL="gemini-2.5-flash"
+```
+
+Optional OpenAI fallback setup:
 
 ```powershell
 supabase secrets set OPENAI_API_KEY="your-openai-api-key"

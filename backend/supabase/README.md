@@ -46,14 +46,23 @@ The current expansion order is Cosmetics & Personal Care first, Export Complianc
 
 ## Image Extraction Secrets
 
-Set these Supabase Edge Function secrets before deploying `extract-ingredients-from-image`:
+Set these Supabase Edge Function secrets before deploying `extract-ingredients-from-image`.
+
+Use Gemini for the low-cost MVP path:
+
+```powershell
+supabase secrets set GEMINI_API_KEY="your-gemini-api-key"
+supabase secrets set GEMINI_VISION_MODEL="gemini-2.5-flash"
+```
+
+OpenAI is still supported as a fallback if you switch providers later:
 
 ```powershell
 supabase secrets set OPENAI_API_KEY="your-openai-api-key"
 supabase secrets set OPENAI_VISION_MODEL="gpt-4.1-mini"
 ```
 
-If you do not have an AI API key yet, the frontend still includes a `Use demo OCR` button so the label-photo review flow can be demonstrated without calling OpenAI.
+If you do not have an AI API key configured, the frontend still includes a `Use demo OCR` button so the label-photo review flow can be demonstrated without calling a paid provider.
 
 ## Deploy
 

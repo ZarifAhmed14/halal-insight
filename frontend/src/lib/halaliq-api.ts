@@ -62,6 +62,14 @@ export type ExtractIngredientsResult = {
   visual_warning?: string | null;
 };
 
+export type BarcodeLookupResult = {
+  code: string;
+  product_name: string;
+  ingredients_text: string;
+  brand?: string;
+  source_label: string;
+};
+
 const DEFAULT_ANALYZE_URL = "https://bwelgjbnzhlxwymakbtp.supabase.co/functions/v1/analyze-food";
 
 const DEFAULT_EXTRACT_URL =
@@ -115,6 +123,10 @@ function extractErrorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export async function analyzeProduct(input: AnalyzeProductInput): Promise<ComplianceReport> {
   const response = await fetch(getAnalyzeUrl(), {
     method: "POST",
@@ -147,4 +159,49 @@ export async function extractIngredientsFromImage(
   }
 
   return payload as ExtractIngredientsResult;
+}
+
+export async function lookupBarcodeProduct(code: string): Promise<BarcodeLookupResult | null> {
+  const normalizedCode = code.trim();
+
+  if (!/^\d{8,14}$/.test(normalizedCode)) {
+    return null;
+  }
+
+  const response = await fetch(
+    `https://world.openfoodfacts.org/api/v2/product/${normalizedCode}.json?fields=code,product_name,ingredients_text,ingredients_text_en,brands,status`,
+  );
+
+  const payload = await readJsonResponse(response);
+
+  if (!response.ok || !isPlainObject(payload)) {
+    return null;
+  }
+
+  const product = isPlainObject(payload.product) ? payload.product : null;
+
+  if (!product) {
+    return null;
+  }
+
+  const productName =
+    typeof product.product_name === "string" ? product.product_name.trim() : "";
+  const ingredientsTextCandidates = [
+    typeof product.ingredients_text_en === "string" ? product.ingredients_text_en.trim() : "",
+    typeof product.ingredients_text === "string" ? product.ingredients_text.trim() : "",
+  ].filter((value) => value.length > 0);
+
+  const ingredientsText = ingredientsTextCandidates[0] ?? "";
+
+  if (!productName || !ingredientsText) {
+    return null;
+  }
+
+  return {
+    code: normalizedCode,
+    product_name: productName,
+    ingredients_text: ingredientsText,
+    brand: typeof product.brands === "string" ? product.brands.trim() || undefined : undefined,
+    source_label: "Retail barcode lookup",
+  };
 }

@@ -28,6 +28,8 @@ import { VerdictBadge } from "@/components/site/VerdictBadge";
 import {
   analyzeProduct,
   extractIngredientsFromImage,
+  lookupBarcodeProduct,
+  type BarcodeLookupResult,
   type ComplianceDomain,
   type ComplianceEntry,
   type ComplianceReport,
@@ -124,6 +126,20 @@ const SAMPLE_SCANS = [
     domain: "pharmaceuticals" as ComplianceDomain,
   },
 ];
+
+const DEMO_BARCODE_LOOKUPS: Record<
+  string,
+  Pick<BarcodeLookupResult, "product_name" | "ingredients_text"> & {
+    brand?: string;
+  }
+> = {
+  "3017620422003": {
+    product_name: "Nutella",
+    brand: "Nutella",
+    ingredients_text:
+      "sugar, palm oil, hazelnuts, low-fat cocoa, skimmed milk powder, whey powder, soy lecithin, vanillin",
+  },
+};
 
 const DOMAIN_OPTIONS: Array<{ value: ComplianceDomain; label: string; helper: string }> = [
   { value: "food", label: "Food", helper: "Ingredient halal readiness" },
@@ -372,6 +388,22 @@ const DOMAIN_INGREDIENT_RULES: DomainIngredientRule[] = [
     reasoning:
       "Carmine is made from cochineal insects and is prohibited or disputed by many reviewers, so it should stay blocked or under strict certifier review.",
     requiredDocuments: ["Ingredient replacement evidence", "Certifier review note", "Supplier declaration"],
+  },
+  {
+    domains: ["food", "export_compliance"],
+    matchers: ["water", "salt", "sea salt", "sugar", "cane sugar", "sucrose", "soybean oil", "soy oil", "palm oil", "sunflower oil", "canola oil", "olive oil", "wheat flour", "rice flour", "corn flour", "corn starch", "maize starch", "tapioca starch", "cocoa powder", "cocoa mass", "hazelnut", "milk powder", "skimmed milk powder", "whole milk powder", "soy lecithin", "sunflower lecithin"],
+    risk: "Low",
+    reasoning:
+      "This is a common baseline food ingredient with no direct halal red flag by name, so it can stay low risk unless supplier evidence says otherwise.",
+    requiredDocuments: [],
+  },
+  {
+    domains: ["cosmetics", "pharmaceuticals"],
+    matchers: ["water", "aqua", "purified water", "cellulose", "microcrystalline cellulose"],
+    risk: "Low",
+    reasoning:
+      "This ingredient is commonly treated as low risk by name and usually does not need special halal escalation unless the supplier specification says otherwise.",
+    requiredDocuments: [],
   },
   {
     domains: ["cosmetics"],
@@ -885,6 +917,47 @@ function parseCodePayload(rawValue: string): ParsedCodeOutcome | null {
   }
 
   return null;
+}
+
+function formatBarcodeSourceLabel(code: string, brand?: string): string {
+  const trimmedBrand = brand?.trim();
+  return trimmedBrand && trimmedBrand.length > 0
+    ? `Retail barcode lookup (${trimmedBrand} • ${code})`
+    : `Retail barcode lookup (${code})`;
+}
+
+async function resolveBarcodePayload(code: string): Promise<CodePayload | null> {
+  const demoLookup = DEMO_BARCODE_LOOKUPS[code];
+
+  if (demoLookup) {
+    const demoIngredients = parseIngredients(demoLookup.ingredients_text);
+
+    if (demoIngredients.length > 0) {
+      return {
+        ingredients: demoIngredients,
+        productName: demoLookup.product_name,
+        sourceLabel: formatBarcodeSourceLabel(code, demoLookup.brand),
+      };
+    }
+  }
+
+  const lookupResult = await lookupBarcodeProduct(code);
+
+  if (!lookupResult) {
+    return null;
+  }
+
+  const ingredients = parseIngredients(lookupResult.ingredients_text);
+
+  if (ingredients.length === 0) {
+    return null;
+  }
+
+  return {
+    ingredients,
+    productName: lookupResult.product_name,
+    sourceLabel: formatBarcodeSourceLabel(code, lookupResult.brand),
+  };
 }
 
 function isComplianceDomain(value: string | null | undefined): value is ComplianceDomain {
@@ -1767,9 +1840,10 @@ function ScanForm({
   const [isCodeScannerOpen, setIsCodeScannerOpen] = useState(false);
   const [codeScannerError, setCodeScannerError] = useState<string | null>(null);
   const [codeScannerHint, setCodeScannerHint] = useState(
-    "Point the camera at a QR code that contains ingredients or a linked product payload.",
+    "Point the camera at a QR code or retail product code.",
   );
   const [isStartingScanner, setIsStartingScanner] = useState(false);
+  const [isLookingUpBarcode, setIsLookingUpBarcode] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1854,7 +1928,7 @@ function ScanForm({
             formats: activeFormats.length > 0 ? activeFormats : ["qr_code"],
           });
           setCodeScannerHint(
-            "Scan a QR code with ingredient data. Product-only barcodes still need a linked catalog.",
+            "Scan a QR code or retail product code. We will load ingredients when product data is available.",
           );
         } else {
           detectorRef.current = null;
@@ -1914,6 +1988,7 @@ function ScanForm({
           if (
             cancelled ||
             !isCodeScannerOpen ||
+            isLookingUpBarcode ||
             !videoRef.current ||
             videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
           ) {
@@ -1939,12 +2014,32 @@ function ScanForm({
               }
 
               if (parsedCode?.kind === "barcode") {
-                setCodeScannerError(
-                  `Barcode ${parsedCode.rawValue} was read, but retail barcode lookup is not connected yet. Use a QR code that includes ingredients, or enter the ingredient list manually.`,
-                );
+                setIsLookingUpBarcode(true);
+                setCodeScannerError(null);
+                setCodeScannerHint(`Looking up product code ${parsedCode.rawValue}...`);
+
+                try {
+                  const barcodePayload = await resolveBarcodePayload(parsedCode.rawValue);
+
+                  if (barcodePayload) {
+                    onCodePayloadDetected(barcodePayload);
+                    setIsCodeScannerOpen(false);
+                    stopCodeScanner();
+                    return;
+                  }
+
+                  setCodeScannerError(
+                    `Barcode ${parsedCode.rawValue} was read, but no ingredient list was available for that product yet. Try another product, a QR code, or enter the ingredient list manually.`,
+                  );
+                  setCodeScannerHint(
+                    "Scan a QR code or another product code. We will load ingredients when product data is available.",
+                  );
+                } finally {
+                  setIsLookingUpBarcode(false);
+                }
               } else {
                 setCodeScannerError(
-                  "Code scanned, but it did not include ingredient data. Use a QR code that stores ingredients or a linked product payload.",
+                  "Code scanned, but it did not include ingredient data yet. Try a QR code with ingredients, or a retail product barcode with lookup support.",
                 );
               }
             }
@@ -1960,7 +2055,7 @@ function ScanForm({
         void scanFrame();
       } catch (_error) {
         setCodeScannerError(
-          "Camera access is blocked right now. Allow camera access on your phone to scan a QR code.",
+          "Camera access is blocked right now. Allow camera access on your phone to scan a QR code or barcode.",
         );
         setIsStartingScanner(false);
       }
@@ -1972,7 +2067,7 @@ function ScanForm({
       cancelled = true;
       stopCodeScanner();
     };
-  }, [isCodeScannerOpen, onCodePayloadDetected]);
+  }, [isCodeScannerOpen, isLookingUpBarcode, onCodePayloadDetected]);
 
   return (
     <>
@@ -2221,7 +2316,7 @@ function ScanForm({
           <DialogHeader className="px-5 pt-5">
             <DialogTitle>Scan a product code</DialogTitle>
             <DialogDescription>
-              Use the back camera to scan a QR code that contains ingredients or a linked product payload.
+              Use the back camera to scan a QR code or a retail product barcode.
             </DialogDescription>
           </DialogHeader>
           <div className="px-5 pb-5">
@@ -2236,7 +2331,11 @@ function ScanForm({
               <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              {isStartingScanner ? "Opening camera..." : codeScannerHint}
+              {isStartingScanner
+                ? "Opening camera..."
+                : isLookingUpBarcode
+                  ? "Looking up product details..."
+                  : codeScannerHint}
             </p>
             {codeScannerError && (
               <div className="mt-3 rounded-xl border border-verdict-mushbooh/25 bg-verdict-mushbooh/10 p-3 text-xs leading-relaxed text-foreground/85">

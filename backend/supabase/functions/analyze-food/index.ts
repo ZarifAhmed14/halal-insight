@@ -212,6 +212,22 @@ const ingredientKnowledgeRules: IngredientKnowledgeRule[] = [ // This local know
     documents: ["Ingredient replacement evidence", "Certifier review note", "Supplier declaration"],
   },
   {
+    domains: ["food", "export_compliance"],
+    matchers: ["water", "salt", "sea salt", "sugar", "cane sugar", "sucrose", "soybean oil", "soy oil", "palm oil", "sunflower oil", "canola oil", "olive oil", "wheat flour", "rice flour", "corn flour", "corn starch", "maize starch", "tapioca starch", "cocoa powder", "cocoa mass", "hazelnut", "milk powder", "skimmed milk powder", "whole milk powder", "soy lecithin", "sunflower lecithin"],
+    risk: "Low",
+    reasoning:
+      "This is a common baseline food ingredient with no direct halal red flag by name, so it can stay low risk unless supplier evidence says otherwise.",
+    documents: [],
+  },
+  {
+    domains: ["cosmetics", "pharmaceuticals"],
+    matchers: ["water", "aqua", "purified water", "cellulose", "microcrystalline cellulose"],
+    risk: "Low",
+    reasoning:
+      "This ingredient is commonly treated as low risk by name and usually does not need special halal escalation unless the supplier specification says otherwise.",
+    documents: [],
+  },
+  {
     domains: ["cosmetics"],
     matchers: ["alcohol", "ethanol", "isopropyl alcohol", "benzyl alcohol"],
     risk: "Medium",
@@ -593,7 +609,7 @@ function getDomainFallbackDocuments(domain: ComplianceDomain): string[] { // Thi
 function buildDomainFallbackReasoning(ingredient: string, input: ValidatedInput, graphUnavailable = false): string { // This helper explains why a domain fallback warning exists when graph data is not yet complete or temporarily unavailable.
   const domainLabel = getDomainLabel(input.domain); // This converts the domain code into a friendly label for the explanation.
   if (graphUnavailable) { // This checks whether the live graph dependency failed so the explanation can stay truthful.
-    return `${ingredient} needs manual review because the live ingredient knowledge service is temporarily unavailable, so HalalIQ is falling back to an evidence-first review instead of clearing it as low risk automatically.`; // This returns a transparent fallback message so users understand why the scan stayed conservative.
+    return `${ingredient} needs supplier evidence before HalalIQ clears it automatically, so the scan is using an evidence-first review for this ingredient.`; // This returns a conservative fallback message without exposing infrastructure details in the end-user workflow.
   } // This line closes the graph-unavailable branch so normal domain-coverage reasoning can run next.
   if (input.domain === "export_compliance") { // This checks whether the fallback is for market-readiness rather than ingredient-only halal risk.
     return `${ingredient} needs export-compliance review for ${input.market} because market readiness depends on authority-specific documents, labeling, and certification evidence, not ingredient matching alone.`; // This returns export-specific reasoning so users understand the warning is a checklist gap, not a final haram ruling.

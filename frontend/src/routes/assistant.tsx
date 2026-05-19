@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import jsQR from "jsqr";
+import {
+  BarcodeFormat as ZXingBarcodeFormat,
+  BrowserMultiFormatReader,
+  type IScannerControls,
+} from "@zxing/browser";
 import readExcelFile from "read-excel-file/browser";
 import {
   AlertTriangle,
@@ -50,34 +54,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-type BarcodeFormat =
-  | "qr_code"
-  | "ean_13"
-  | "ean_8"
-  | "upc_a"
-  | "upc_e"
-  | "code_128";
-
-type DetectedBarcode = {
-  format: BarcodeFormat;
-  rawValue?: string;
-};
-
-type BarcodeDetectorInstance = {
-  detect: (source: ImageBitmapSource) => Promise<DetectedBarcode[]>;
-};
-
-type BarcodeDetectorConstructor = {
-  new (options?: { formats?: BarcodeFormat[] }): BarcodeDetectorInstance;
-  getSupportedFormats?: () => Promise<BarcodeFormat[]>;
-};
-
-declare global {
-  interface Window {
-    BarcodeDetector?: BarcodeDetectorConstructor;
-  }
-}
 
 export const Route = createFileRoute("/assistant")({
   head: () => ({
@@ -1845,10 +1821,9 @@ function ScanForm({
   const [isStartingScanner, setIsStartingScanner] = useState(false);
   const [isLookingUpBarcode, setIsLookingUpBarcode] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanTimeoutRef = useRef<number | null>(null);
-  const detectorRef = useRef<BarcodeDetectorInstance | null>(null);
+  const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const scannerReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const detectionLockRef = useRef(false);
   const extractedConfidence = extractionResult
     ? Math.round(extractionResult.confidence * 100)
     : null;
@@ -1865,22 +1840,13 @@ function ScanForm({
     : "Run compliance scan";
 
   const stopCodeScanner = () => {
-    if (scanTimeoutRef.current !== null) {
-      window.clearTimeout(scanTimeoutRef.current);
-      scanTimeoutRef.current = null;
-    }
-
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    detectorRef.current = null;
+    detectionLockRef.current = false;
+    scannerControlsRef.current?.stop();
+    scannerControlsRef.current = null;
+    scannerReaderRef.current = null;
 
     if (videoRef.current) {
       videoRef.current.srcObject = null;
-    }
-
-    if (canvasRef.current) {
-      const context = canvasRef.current.getContext("2d");
-      context?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
   };
 
@@ -1890,6 +1856,7 @@ function ScanForm({
     if (!isCodeScannerOpen) {
       stopCodeScanner();
       setIsStartingScanner(false);
+      setIsLookingUpBarcode(false);
       return;
     }
 
@@ -1908,120 +1875,65 @@ function ScanForm({
       }
 
       try {
-        if (window.BarcodeDetector) {
-          const requestedFormats: BarcodeFormat[] = [
-            "qr_code",
-            "ean_13",
-            "ean_8",
-            "upc_a",
-            "upc_e",
-            "code_128",
-          ];
-          const supportedFormats = window.BarcodeDetector.getSupportedFormats
-            ? await window.BarcodeDetector.getSupportedFormats()
-            : requestedFormats;
-          const activeFormats = requestedFormats.filter((format) =>
-            supportedFormats.includes(format),
-          );
-
-          detectorRef.current = new window.BarcodeDetector({
-            formats: activeFormats.length > 0 ? activeFormats : ["qr_code"],
-          });
-          setCodeScannerHint(
-            "Scan a QR code or retail product code. We will load ingredients when product data is available.",
-          );
-        } else {
-          detectorRef.current = null;
-          setCodeScannerHint(
-            "QR scanning is running in fallback mode. Hold the code steady and keep it well lit.",
-          );
+        if (!videoRef.current) {
+          throw new Error("Scanner preview is not ready.");
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-          },
-          audio: false,
-        });
+        const reader = new BrowserMultiFormatReader();
+        reader.possibleFormats = [
+          ZXingBarcodeFormat.QR_CODE,
+          ZXingBarcodeFormat.EAN_13,
+          ZXingBarcodeFormat.EAN_8,
+          ZXingBarcodeFormat.UPC_A,
+          ZXingBarcodeFormat.UPC_E,
+          ZXingBarcodeFormat.CODE_128,
+        ];
+        scannerReaderRef.current = reader;
 
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
+        setCodeScannerHint(
+          "Scan a QR code or retail product code. Hold the phone steady and keep the code inside the frame.",
+        );
 
         setIsStartingScanner(false);
 
-        const detectQrFromVideoFrame = () => {
-          if (!videoRef.current || !canvasRef.current) {
-            return null;
-          }
+        const controls = await reader.decodeFromVideoDevice(
+          undefined,
+          videoRef.current,
+          (result, _error, activeControls) => {
+            if (
+              cancelled ||
+              !result ||
+              detectionLockRef.current
+            ) {
+              return;
+            }
 
-          const video = videoRef.current;
-          const canvas = canvasRef.current;
+            const rawValue = result.getText().trim();
 
-          if (!video.videoWidth || !video.videoHeight) {
-            return null;
-          }
+            if (!rawValue) {
+              return;
+            }
 
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+            detectionLockRef.current = true;
+            const parsedCode = parseCodePayload(rawValue);
 
-          const context = canvas.getContext("2d", { willReadFrequently: true });
+            if (parsedCode?.kind === "payload") {
+              activeControls.stop();
+              onCodePayloadDetected(parsedCode.payload);
+              setIsCodeScannerOpen(false);
+              stopCodeScanner();
+              return;
+            }
 
-          if (!context) {
-            return null;
-          }
+            if (parsedCode?.kind === "barcode") {
+              setIsLookingUpBarcode(true);
+              setCodeScannerError(null);
+              setCodeScannerHint(`Looking up product code ${parsedCode.rawValue}...`);
 
-          context.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-          return jsQR(frame.data, frame.width, frame.height)?.data?.trim() ?? null;
-        };
-
-        const scanFrame = async () => {
-          if (
-            cancelled ||
-            !isCodeScannerOpen ||
-            isLookingUpBarcode ||
-            !videoRef.current ||
-            videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-          ) {
-            scanTimeoutRef.current = window.setTimeout(scanFrame, 400);
-            return;
-          }
-
-          try {
-            const rawValue = detectorRef.current
-              ? (
-                  await detectorRef.current.detect(videoRef.current)
-                ).find((item) => item.rawValue?.trim())?.rawValue?.trim() ?? null
-              : detectQrFromVideoFrame();
-
-            if (rawValue) {
-              const parsedCode = parseCodePayload(rawValue);
-
-              if (parsedCode?.kind === "payload") {
-                onCodePayloadDetected(parsedCode.payload);
-                setIsCodeScannerOpen(false);
-                stopCodeScanner();
-                return;
-              }
-
-              if (parsedCode?.kind === "barcode") {
-                setIsLookingUpBarcode(true);
-                setCodeScannerError(null);
-                setCodeScannerHint(`Looking up product code ${parsedCode.rawValue}...`);
-
-                try {
-                  const barcodePayload = await resolveBarcodePayload(parsedCode.rawValue);
-
+              void resolveBarcodePayload(parsedCode.rawValue)
+                .then((barcodePayload) => {
                   if (barcodePayload) {
+                    activeControls.stop();
                     onCodePayloadDetected(barcodePayload);
                     setIsCodeScannerOpen(false);
                     stopCodeScanner();
@@ -2034,25 +1946,37 @@ function ScanForm({
                   setCodeScannerHint(
                     "Scan a QR code or another product code. We will load ingredients when product data is available.",
                   );
-                } finally {
+                })
+                .catch(() => {
+                  setCodeScannerError(
+                    "The code was read, but the product lookup could not be completed right now. Try again or enter the ingredient list manually.",
+                  );
+                })
+                .finally(() => {
                   setIsLookingUpBarcode(false);
-                }
-              } else {
-                setCodeScannerError(
-                  "Code scanned, but it did not include ingredient data yet. Try a QR code with ingredients, or a retail product barcode with lookup support.",
-                );
-              }
+                  window.setTimeout(() => {
+                    detectionLockRef.current = false;
+                  }, 900);
+                });
+
+              return;
             }
-          } catch (_error) {
+
             setCodeScannerError(
-              "The camera opened, but the code could not be read yet. Try better lighting or move the phone closer.",
+              "Code scanned, but it did not include ingredient data yet. Try a QR code with ingredients, or a retail product barcode with lookup support.",
             );
-          }
+            window.setTimeout(() => {
+              detectionLockRef.current = false;
+            }, 900);
+          },
+        );
 
-          scanTimeoutRef.current = window.setTimeout(scanFrame, 600);
-        };
+        if (cancelled) {
+          controls.stop();
+          return;
+        }
 
-        void scanFrame();
+        scannerControlsRef.current = controls;
       } catch (_error) {
         setCodeScannerError(
           "Camera access is blocked right now. Allow camera access on your phone to scan a QR code or barcode.",
@@ -2067,7 +1991,7 @@ function ScanForm({
       cancelled = true;
       stopCodeScanner();
     };
-  }, [isCodeScannerOpen, isLookingUpBarcode, onCodePayloadDetected]);
+  }, [isCodeScannerOpen, onCodePayloadDetected]);
 
   return (
     <>
@@ -2328,7 +2252,6 @@ function ScanForm({
                 muted
                 className="aspect-[3/4] w-full bg-black object-cover"
               />
-              <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
               {isStartingScanner

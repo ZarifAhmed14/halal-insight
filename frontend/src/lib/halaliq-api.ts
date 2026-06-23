@@ -146,19 +146,40 @@ export async function analyzeProduct(input: AnalyzeProductInput): Promise<Compli
 export async function extractIngredientsFromImage(
   input: ExtractIngredientsInput,
 ): Promise<ExtractIngredientsResult> {
-  const response = await fetch(getExtractUrl(), {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify(input),
-  });
+  try {
+    const response = await fetch(getExtractUrl(), {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify(input),
+    });
+    const payload = await readJsonResponse(response);
 
-  const payload = await readJsonResponse(response);
-
-  if (!response.ok) {
-    throw new Error(extractErrorMessage(payload, "Ingredient extraction failed."));
+    if (response.ok) return payload as ExtractIngredientsResult;
+  } catch (_error) {
+    // ponytail: local OCR keeps the demo usable when the optional hosted extractor is unavailable.
   }
 
-  return payload as ExtractIngredientsResult;
+  const { recognize } = await import("tesseract.js");
+  const imageUrl = `data:${input.mime_type};base64,${input.image_base64}`;
+  const result = await recognize(imageUrl, "eng");
+  const rawText = result.data.text.trim();
+  const ingredientText = rawText.replace(/[\s\S]*?ingredients?\s*[:\-]?/i, "");
+  const ingredients = ingredientText
+    .split(/[,;\n]/)
+    .map((value) => value.replace(/^[\s•*-]+|[\s.]+$/g, "").trim())
+    .filter((value) => value.length > 1 && value.length < 80);
+  const confidence = Math.max(0, Math.min(1, result.data.confidence / 100));
+
+  return {
+    raw_text: rawText,
+    ingredients: Array.from(new Set(ingredients)),
+    confidence,
+    warnings: rawText
+      ? ["Please review the extracted text before scanning."]
+      : ["No readable label text was found."],
+    needs_review: true,
+    visual_warning: null,
+  };
 }
 
 export async function lookupBarcodeProduct(
@@ -208,8 +229,7 @@ export async function lookupBarcodeProduct(
       continue;
     }
 
-    const productName =
-      typeof product.product_name === "string" ? product.product_name.trim() : "";
+    const productName = typeof product.product_name === "string" ? product.product_name.trim() : "";
     const ingredientsTextCandidates = [
       typeof product.ingredients_text_en === "string" ? product.ingredients_text_en.trim() : "",
       typeof product.ingredients_text === "string" ? product.ingredients_text.trim() : "",

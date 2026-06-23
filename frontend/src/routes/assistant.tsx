@@ -27,7 +27,6 @@ import {
 import { Nav } from "@/components/site/Nav";
 import { VerdictBadge } from "@/components/site/VerdictBadge";
 import {
-  analyzeProduct,
   extractIngredientsFromImage,
   type ComplianceDomain,
   type ComplianceEntry,
@@ -49,6 +48,7 @@ import {
   SAMPLE_SCANS,
 } from "@/features/assistant/config";
 import {
+  analyzeProductLocally,
   applyDomainKnowledgeToReport,
   applyMarketRulesToReport,
   buildReadinessBrief,
@@ -233,7 +233,7 @@ function AssistantPage() {
       setMarket(nextMarket);
       setDomain(nextDomain);
 
-      const nextReport = await analyzeProduct({
+      const nextReport = analyzeProductLocally({
         product_name: productNameForScan,
         ingredients,
         market: nextMarket.trim(),

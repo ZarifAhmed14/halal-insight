@@ -158,6 +158,53 @@ export function applyDomainKnowledgeToReport(
   };
 }
 
+export function analyzeProductLocally({
+  product_name,
+  ingredients,
+  market,
+  domain = "food",
+}: {
+  product_name: string;
+  ingredients: string[];
+  market: string;
+  domain?: ComplianceDomain;
+}): ComplianceReport {
+  const entries = ingredients.map<ComplianceEntry>((ingredient) => {
+    const rule = findDomainIngredientRule(domain, ingredient);
+
+    return {
+      ingredient,
+      risk: rule?.risk ?? "Low",
+      reasoning:
+        rule?.reasoning ??
+        "No direct halal concern was found by name. Keep the ingredient list available for normal review.",
+      required_documents: rule?.requiredDocuments ?? [],
+      affected_markets: [market],
+    };
+  });
+  const blockers = entries.filter((entry) => getRiskPriority(entry.risk) >= 4);
+  const warnings = entries.filter((entry) => getRiskPriority(entry.risk) === 3);
+  const safe = entries.filter((entry) => getRiskPriority(entry.risk) <= 2);
+  const overallStatus: OverallStatus =
+    blockers.length > 0 ? "Not Ready" : warnings.length > 0 ? "Needs Review" : "Low Risk";
+
+  return {
+    product_name,
+    domain,
+    market,
+    overall_status: overallStatus,
+    blockers,
+    warnings,
+    safe,
+    summary: {
+      total_ingredients: entries.length,
+      blockers_count: blockers.length,
+      warnings_count: warnings.length,
+      human_readable: `${product_name} was checked across ${entries.length} ingredient(s). Overall status: ${overallStatus}.`,
+    },
+  };
+}
+
 export function buildInternalProductName({
   productName,
   domain,
